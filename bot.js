@@ -6,63 +6,7 @@
            \/_____/   \/_____/     \/_/   \/_/\/_/   \/_/     \/_/
 
 
-This is a sample Slack bot built with Botkit.
-
-This bot demonstrates many of the core features of Botkit:
-
-* Connect to Slack using the real time API
-* Receive messages based on "spoken" patterns
-* Reply to messages
-* Use the conversation system to ask questions
-* Use the built in storage system to store and retrieve information
-  for a user.
-
-# RUN THE BOT:
-
-  Get a Bot token from Slack:
-
-    -> http://my.slack.com/services/new/bot
-
-  Run your bot from the command line:
-
-    token=<MY TOKEN> node bot.js
-
-# USE THE BOT:
-
-  Find your bot inside Slack to send it a direct message.
-
-  Say: "Hello"
-
-  The bot will reply "Hello!"
-
-  Say: "who are you?"
-
-  The bot will tell you its name, where it running, and for how long.
-
-  Say: "Call me <nickname>"
-
-  Tell the bot your nickname. Now you are friends.
-
-  Say: "who am I?"
-
-  The bot will tell you your nickname, if it knows one for you.
-
-  Say: "shutdown"
-
-  The bot will ask if you are sure, and then shut itself down.
-
-  Make sure to invite your bot into other channels using /invite @<my bot>!
-
-# EXTEND THE BOT:
-
-  Botkit is has many features for building cool and useful bots!
-
-  Read all about it here:
-
-    -> http://howdy.ai/botkit
-
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~*/
-
+*/
 
 if (!process.env.token) {
     console.log('Error: Specify token in environment');
@@ -72,6 +16,11 @@ if (!process.env.token) {
 var Botkit = require('./lib/Botkit.js');
 var os = require('os');
 
+var MongoClient = require('mongodb').MongoClient;
+var assert = require('assert');
+var url = 'mongodb://localhost:27017/botkit';
+
+
 var controller = Botkit.slackbot({
     debug: true,
 });
@@ -79,6 +28,128 @@ var controller = Botkit.slackbot({
 var bot = controller.spawn({
     token: process.env.token
 }).startRTM();
+
+controller.hears(['add link (.*)'],'direct_message,direct_mention,mention',function(bot, message) {
+    var matches = message.text.match(/add link (.*)/i);
+    var link = matches[1];
+    console.log(link);
+    console.log('Message Link ' + link);
+    console.log(message.user);
+
+    var user = message.user;
+    var tags = '';
+
+    bot.startConversation(message,function(err, convo) {
+        convo.ask('What tag would you like to add?', function(message, callback){
+            tags = message.text;
+            console.log(tags);
+            convo.say("I have added the link with your tag!");
+            convo.next();
+            MongoClient.connect(url, function(err, db) {
+              assert.equal(null, err);
+              insertLink(db, message, message.user, link, tags, function() {
+                  db.close();
+              });
+            });
+        });
+    });
+});
+
+controller.hears(['get links'],'direct_message,direct_mention,mention',function(bot, message) {
+    MongoClient.connect(url, function(err, db) {
+      assert.equal(null, err);
+      findLink(db, message, '', function() {
+          db.close();
+      });
+    });
+});
+
+
+
+controller.hears(['bring links with tag (.*)'],'direct_message,direct_mention,mention',function(bot, message) {
+//start conversation for what tags they would like
+    var matches = message.text.match(/bring links with tag (.*)/i);
+    var tag = matches[1];
+    console.log('This is the tag:' + tag);
+
+
+    MongoClient.connect(url, function(err, db) {
+      assert.equal(null, err);
+      findLinkWithTag(db, message, tag, function() {
+          db.close();
+      });
+    });
+});
+
+
+var findLink = function(db, message, tag, callback) {
+   var cursor = db.collection('links').find( { "user": message.user} );
+   bot.reply(message, "Getting links, to get links with a specific tag, say 'bring link with tag <tag>'");
+
+   cursor.each(function(err, doc) {
+      assert.equal(err, null);
+      if (doc != null) {
+         console.dir(doc);
+         var string = doc.link
+         string = string.replace(/[\<\>]/g,'*');
+         console.log(string);
+         string += " tagged as: " + doc.tags;
+         bot.reply(message, string);
+      } else {
+         callback();
+      }
+   });
+};
+
+var findLinkWithTag = function(db, message, tag, callback) {
+    console.log('Tag: ' + tag);
+    tag = tag.toLowerCase();
+    bot.reply(message, 'If you don\'t have any, I probably won\'t say anything...');
+    var cursor = db.collection('links').find( { "user": message.user, "tags": tag} );
+    cursor.each(function(err, doc) {
+    assert.equal(err, null);
+    if (doc != null) {
+         console.dir(doc);
+         var string = doc.link
+         string = string.replace(/[\<\>]/g,'*');
+         console.log(string);
+         string += " tagged as: " + doc.tags;
+         bot.reply(message, string);
+      } else {
+         callback();
+      }
+   });
+};
+
+var insertLink = function(db, message, user, link, tags, callback) {
+    tags = tags.toLowerCase();
+    db.collection('links').insertOne( {
+        "user" : user,
+        "link" : link,
+        "tags" : tags
+    }, function(err, result) {
+    assert.equal(err, null);
+    console.log("Inserted a document into the link collection.");
+    callback(result);
+  });
+};
+
+
+controller.hears(['help','about'],'direct_message,direct_mention,mention',function(bot, message) {
+
+
+    controller.storage.users.get(message.user,function(err, user) {
+        var outputMessage = '';
+        if (user && user.name) {
+            outputMessage = 'Hello ' + user.name + '!!';
+        } else {
+            outputMessage = 'Hello.';
+        }
+
+        outputMessage += '\n\n These are the commands that I can respond to at the moment. \n\nhello or hi - Say hello to me \ncall me "name" - Tell me your name and I will respond to you by name. \nuptime - I will tell you a little about myself\nadd link <link> - This will add a link to for you to be retrieved later.\nget links - will return your links\nbring links with tag <tag> - Will return links of a speific tag'
+        bot.reply(message,outputMessage);
+    });
+});
 
 
 controller.hears(['hello','hi'],'direct_message,direct_mention,mention',function(bot, message) {
@@ -133,28 +204,37 @@ controller.hears(['what is my name','who am i'],'direct_message,direct_mention,m
 
 controller.hears(['shutdown'],'direct_message,direct_mention,mention',function(bot, message) {
 
-    bot.startConversation(message,function(err, convo) {
-        convo.ask('Are you sure you want me to shutdown?',[
-            {
-                pattern: bot.utterances.yes,
-                callback: function(response, convo) {
-                    convo.say('Bye!');
-                    convo.next();
-                    setTimeout(function() {
-                        process.exit();
-                    },3000);
+    controller.storage.users.get(message.user,function(err, user) {
+        if (user && (user.name == 'chris' || user.name == 'Chris')) {
+            bot.startConversation(message,function(err, convo) {
+                convo.ask('Are you sure you want me to shutdown?',[
+                    {
+                        pattern: bot.utterances.yes,
+                        callback: function(response, convo) {
+                            convo.say('Bye!');
+                            convo.next();
+                            setTimeout(function() {
+                                process.exit();
+                            },3000);
+                        }
+                    },
+                {
+                    pattern: bot.utterances.no,
+                    default: true,
+                    callback: function(response, convo) {
+                        convo.say('*Phew!*');
+                        convo.next();
+                    }
                 }
-            },
-        {
-            pattern: bot.utterances.no,
-            default: true,
-            callback: function(response, convo) {
-                convo.say('*Phew!*');
-                convo.next();
-            }
+                ]);
+            });
+        } else {
+            bot.reply(message,"Only @chris_p can shut me down!");
         }
-        ]);
+
+
     });
+
 });
 
 
@@ -166,6 +246,62 @@ controller.hears(['uptime','identify yourself','who are you','what is your name'
     bot.reply(message,':robot_face: I am a bot named <@' + bot.identity.name + '>. I have been running for ' + uptime + ' on ' + hostname + '.');
 
 });
+
+controller.on('user_channel_join',function(bot,message) {
+    bot.reply(message, 'Welcome to the channel! My name is thinkbot! If you need help, please type `thinkbot help` and I\'ll see what I can do!');
+});
+
+
+controller.hears(['question me'],['direct_message','direct_mention','mention','ambient'],function(bot,message) {
+
+  // start a conversation to handle this response.
+  bot.startConversation(message,function(err,convo) {
+
+    convo.ask('Shall we proceed Say YES, NO or DONE to quit.',[
+      {
+        pattern: 'done',
+        callback: function(response,convo) {
+          convo.say('OK you are done!');
+          convo.next();
+        }
+      },
+      {
+        pattern: bot.utterances.yes,
+        callback: function(response,convo) {
+          convo.say('Great! I will continue...');
+          // do something else...
+          convo.next();
+
+        }
+      },
+      {
+        pattern: bot.utterances.no,
+        callback: function(response,convo) {
+          convo.say('Perhaps later.');
+          // do something else...
+          convo.next();
+        }
+      },
+      {
+        default: true,
+        callback: function(response,convo) {
+          // just repeat the question
+          convo.repeat();
+          convo.next();
+        }
+      }
+    ]);
+  })
+});
+
+
+
+
+
+
+
+
+
 
 function formatUptime(uptime) {
     var unit = 'second';
